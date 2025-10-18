@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>PipePilot — Test AI Booking Assistant</title>
+</head>
+<body>
+  <h1>PipePilot (demo)</h1>
+  <p>This is a mock page—ignore the design. We're just testing the assistant.</p>
+
+  <script>
+  (function(){
+    // ✅ Simple setting: works after deploy on Vercel
+    const API_BASE = "/api";
+
+    const SERVICE_CITIES = new Set([
+      "Atherton","Belmont","Brisbane","Burlingame","Daly City",
+      "Foster City","Hillsborough","Menlo Park","Mountain View",
+      "Palo Alto","Redwood City","San Bruno","San Carlos",
+      "San Francisco","San Mateo","South San Francisco"
+    ]);
+    const wait = ms => new Promise(r => setTimeout(r, ms));
+
+    function humanizeCategory(cat) {
+      const [group, sub] = String(cat || 'other').split(':');
+      const toTitle = s => (s || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const niceGroup = toTitle(group || 'Other');
+      let niceSub = toTitle(sub || group || 'Other');
+      niceSub = niceSub
+        .replace(/\bRepair Install\b/i, 'Repair / Install')
+        .replace(/\bVideo Camera\b/i, 'Video Camera')
+        .replace(/\bWater Heaters\b/i, 'Water Heater');
+      return { niceGroup, niceSub };
+    }
+    function articleFor(phrase){ return /^[aeiou]/i.test((phrase||'').trim()) ? 'an' : 'a'; }
+    function looksLikeLocalZip(zip){ return /^(940|941|943|944)\d{2}$/.test(zip); }
+
+    // Typing dots
+    let typingEl = null;
+    function showTyping(){
+      if (typingEl) return;
+      typingEl = document.createElement('div');
+      typingEl.className = 'ai-msg bot ai-typing';
+      typingEl.innerHTML = `<div class="ai-bubble-msg"><span class="dots"></span><span class="dots"></span><span class="dots"></span></div>`;
+      bodyEl.appendChild(typingEl); bodyEl.scrollTop = bodyEl.scrollHeight;
+    }
+    function hideTyping(){ if(!typingEl) return; typingEl.remove(); typingEl=null; }
+    async function botSay(text, delay=400){ showTyping(); await wait(delay); hideTyping(); addMsg('bot', text); }
+
+    const styles = `
+      .ai-bubble{position:fixed;right:24px;bottom:24px;width:56px;height:56px;border-radius:50%;box-shadow:0 10px 20px rgba(0,0,0,.2);display:flex;align-items:center;justify-content:center;cursor:pointer;background:#1f2937;color:#fff;font-weight:600;z-index:999999}
+      .ai-panel{position:fixed;right:24px;bottom:92px;width:340px;max-height:70vh;background:#fff;border-radius:16px;box-shadow:0 20px 40px rgba(0,0,0,.25);display:none;flex-direction:column;overflow:hidden;z-index:999999}
+      .ai-header{background:#111827;color:#fff;padding:12px 14px;font-weight:600}
+      .ai-body{padding:12px;overflow:auto;max-height:56vh;font-size:14px;line-height:1.4}
+      .ai-msg{margin:8px 0;display:flex}
+      .ai-msg.bot{justify-content:flex-start}
+      .ai-msg.user{justify-content:flex-end}
+      .ai-bubble-msg{padding:10px 12px;border-radius:12px;max-width:80%}
+      .ai-msg.bot .ai-bubble-msg{background:#f3f4f6;color:#111827;border-top-left-radius:4px}
+      .ai-msg.user .ai-bubble-msg{background:#dbeafe;color:#111827;border-top-right-radius:4px}
+      .ai-typing .ai-bubble-msg { background:#f3f4f6; color:#111827; }
+      .ai-typing .dots { display:inline-block;width:6px;height:6px;margin:0 2px;border-radius:50%;background:#9ca3af;opacity:.6;animation:dotPulse 1.2s infinite ease-in-out; }
+      .ai-typing .dots:nth-child(2){ animation-delay:.15s }
+      .ai-typing .dots:nth-child(3){ animation-delay:.30s }
+      @keyframes dotPulse { 0%,80%,100%{transform:scale(0.6);opacity:.4} 40%{transform:scale(1);opacity:.9} }
+      .ai-input{display:flex;gap:8px;padding:10px;border-top:1px solid #e5e7eb}
+      .ai-input input{flex:1;padding:10px;border:1px solid #e5e7eb;border-radius:10px}
+      .ai-input button{padding:10px 14px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}
+    `;
+    const css = document.createElement('style'); css.textContent=styles; document.head.appendChild(css);
+
+    const bubble = document.createElement('div'); bubble.className='ai-bubble'; bubble.textContent='Chat'; document.body.appendChild(bubble);
+    const panel = document.createElement('div');
+    panel.className='ai-panel';
+    panel.innerHTML = `
+      <div class="ai-header">PipePilot Assistant</div>
+      <div class="ai-body" id="aiBody"></div>
+      <div class="ai-input"><input id="aiInput" placeholder="Type here…" /><button id="aiSend">Send</button></div>
+    `;
+    document.body.appendChild(panel);
+    const bodyEl = panel.querySelector('#aiBody');
+    const inputEl = panel.querySelector('#aiInput');
+    const sendEl  = panel.querySelector('#aiSend');
+
+    const state = { step:'greet', lead:{ name:'', phone:'', email:'', zip:'', service_category:'', user_message:'', source_page: location.href } };
+
+    function addMsg(role, text){
+      const row = document.createElement('div');
+      row.className = `ai-msg ${role}`;
+      row.innerHTML = `<div class="ai-bubble-msg">${text}</div>`;
+      bodyEl.appendChild(row); bodyEl.scrollTop = bodyEl.scrollHeight;
+    }
+
+    // === CLASSIFIER (API first, safe fallback) ===
+    async function classify(text){
+      const payload = { text, history: [] };
+      try {
+        let res = await fetch(`${API_BASE}/routeText`, {
+          method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+        });
+        if(!res.ok){ // quick retry
+          res = await fetch(`${API_BASE}/routeText`, {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+          });
+        }
+        if(!res.ok) throw new Error('bad status');
+        const data = await res.json();
+        if (data && data.category) return data;
+        throw new Error('empty');
+      } catch(e) {
+        return classifyFallback(text);
+      }
+    }
+
+    // --- Regex fallback (your original rules) ---
+    function classifyFallback(text){
+      const t = (text||"").toLowerCase();
+      if (/(toilet).*(clog|clogged)|clog(ged)?.*toilet/.test(t))
+        return { category: "plumbing:toilet_repair_install", followup: "Is the toilet overflowing, not flushing, or fully clogged?" };
+      if (/((kitchen|bath(room)?)?\s*(sink|shower|tub|bathtub)).*(clog|clogged)|clog(ged)?.*(sink|shower|tub|bathtub)/.test(t))
+        return { category: "sewer_drains:drain_cleaning", followup: "Is it a single fixture or are multiple drains backing up?" };
+      if (/(drain (clean|clog|backup)|clog(ged)? drain|sewer (line )?(clean|clog|backup)|hydro.?jet)/.test(t))
+        return { category: "sewer_drains:drain_cleaning", followup: "Is it a kitchen sink, bathtub/shower, toilet, or the main line backing up?" };
+      if (/(sewer (camera|video) (inspect|inspection)|camera inspection)/.test(t)) return "sewer_drains:video_camera_inspection";
+      if (/(trenchless|pipe lining|sewer line repair|water line repair)/.test(t))   return "sewer_drains:trenchless_repairs";
+      if (/(main water line|water and sewer line repair|sewer line replacement)/.test(t)) return "sewer_drains:line_repairs";
+      if (/(emergency plumbing|urgent plumber|flooding now)/.test(t)) return "plumbing:emergency";
+      if (/(water heater|no hot water|tankless|pilot)/.test(t))
+        return { category:"plumbing:water_heaters", followup:"Do you have no hot water at all, intermittent hot water, or is the unit leaking?" };
+      if (/(leak detection|leak test|slab leak|wet ceiling|water on floor)/.test(t)) return "plumbing:leak_detection";
+      if (/(toilet (repair|install)|toilet won.?t flush|toilet leak)/.test(t))
+        return { category:"plumbing:toilet_repair_install", followup:"Is the toilet not flushing, overflowing, leaking, or do you need a new install?" };
+      if (/(garbage disposal|disposal (stuck|jam|replace|install))/.test(t)) return "plumbing:garbage_disposal";
+      if (/(faucet (repair|install|replace)|fixture install)/.test(t))       return "plumbing:faucet_fixture";
+      if (/(repip(e|ing)|whole house repipe)/.test(t))                       return "plumbing:whole_house_repiping";
+      if (/(gas line (install|repair)|gas leak|gas shutoff)/.test(t))        return "plumbing:gas_line";
+      if (/(hose bib)/.test(t))                                              return "plumbing:hose_bib";
+      if (/(automatic water shutoff valve|water shutoff valve)/.test(t))     return "plumbing:water_shutoff_valve";
+      if (/(pump|sump pump|booster pump|grinder pump|ejector pump|lift station)/.test(t)) return "plumbing:pumps";
+      if (/(electric(ian)?|wiring|panel upgrade|ceiling fan|light install|generator|tesla charger|ev charger|smoke detector|co2 detector)/.test(t)) return "electrical:general";
+      if (/(refrigerator|sub ?zero|washer|washing machine|dryer|dishwasher|oven|range|stove|ice maker)/.test(t)) return "appliances:repair";
+      return "other";
+    }
+
+    // 🔔 Submit lead to your API
+    async function sendLead(leadPayload){
+      const res = await fetch(`${API_BASE}/lead`, {
+        method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(leadPayload)
+      });
+      if (!res.ok) throw new Error('lead failed');
+      return res.json();
+    }
+
+    // --- MAIN STATE HANDLER ---
+    async function handleUserInput(text){
+      addMsg('user', text);
+
+      if (state.step === 'greet') {
+        state.lead.user_message = text.trim();
+        const cls = await classify(text);
+        const cat = typeof cls === 'string' ? cls : (cls.category || 'other');
+        const followup = typeof cls === 'object' && cls.followup ? cls.followup : '';
+        state.lead.service_category = cat;
+        const { niceSub } = humanizeCategory(cat);
+        const art = articleFor(niceSub);
+        await wait(400); await botSay(`Thanks — that sounds like ${art} ${niceSub} issue.`);
+        if (followup) { await wait(400); await botSay(followup); state.step='followup'; return; }
+        await wait(400); await botSay(`What ZIP code or city are you in?`); state.step='zip'; return;
+      }
+
+      if (state.step === 'followup') {
+        state.lead.followup_notes = (state.lead.followup_notes || '');
+        state.lead.followup_notes = (state.lead.followup_notes + ' ' + text).trim();
+        await botSay('Got it.'); await wait(400); await botSay(`What ZIP code or city are you in?`);
+        state.step='zip'; return;
+      }
+
+      if (state.step === 'zip') {
+        const raw = text.trim();
+        const zip = (raw.match(/\b\d{5}\b/) || [])[0];
+        const cityGuess = raw.replace(/\d/g,'').trim().replace(/,?\s*CA$/i,'');
+        if (!zip && !cityGuess){ addMsg('bot','You can send a 5-digit ZIP (e.g., 94127) **or** a city (e.g., “Daly City”).'); return; }
+        if (cityGuess){
+          const normalized = cityGuess.replace(/\s+/g,' ').replace(/\b\w/g, c=>c.toUpperCase());
+          if (!SERVICE_CITIES.has(normalized)){ await botSay(`We may not cover ${cityGuess}. If you think we do, type “override” or try a ZIP.`); return; }
+          state.lead.city = cityGuess; state.lead.zip = zip || '';
+        } else {
+          if (!looksLikeLocalZip(zip)){ await botSay(`That ZIP may be outside our area. Try a nearby city (e.g., “San Mateo”) or type “override”.`); return; }
+          state.lead.zip = zip; state.lead.city = state.lead.city || '';
+        }
+        await botSay(`Thanks!`); await wait(400); await botSay(`What’s your name?`); state.step='name'; return;
+      }
+
+      if (state.step === 'name') { state.lead.name = text.trim().slice(0,120); await botSay(`And the best phone number to reach you?`); state.step='phone'; return; }
+
+      if (state.step === 'phone') {
+        const phone = text.replace(/[^\d+]/g,'');
+        if (phone.length < 10){ addMsg('bot','That phone looks short — mind sending a 10-digit number?'); return; }
+        state.lead.phone = phone; await botSay(`Optional: what’s your email? (or type “skip”)`); state.step='email'; return;
+      }
+
+      if (state.step === 'email') {
+        if(!/skip/i.test(text)){
+          const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text.trim());
+          if(!ok){ addMsg('bot','That email doesn’t look right. You can re-enter or type “skip”.'); return; }
+          state.lead.email = text.trim();
+        }
+        await botSay(`One moment while I hand this to a technician…`); state.step='submitting';
+        try {
+          await sendLead(state.lead);
+          await botSay(`All set ✅ You’ll get a text or call shortly to confirm details.`); state.step='done';
+        } catch(e){
+          await botSay(`Hmm, something went wrong submitting your request. You can call us directly at (xxx) xxx-xxxx.`); state.step='error';
+        }
+        return;
+      }
+
+      if (state.step === 'done') { await botSay(`If anything changes, just send a message here. 👋`); return; }
+    }
+
+    // UI wiring
+    const openPanel = () => { panel.style.display = 'flex'; if (bodyEl.childElementCount === 0) addMsg('bot','Hi! 👋 What can we help you with today?'); inputEl.focus(); };
+    bubble.addEventListener('click', () => {
+      panel.style.display = (panel.style.display === 'none' || !panel.style.display) ? 'flex' : 'none';
+      if (panel.style.display === 'flex' && bodyEl.childElementCount === 0) { addMsg('bot','Hi! 👋 What can we help you with today?'); inputEl.focus(); }
+    });
+    sendEl.addEventListener('click', () => { const v = inputEl.value.trim(); if(!v) return; inputEl.value=''; handleUserInput(v); });
+    inputEl.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ sendEl.click(); } });
+  })();
+  </script>
+</body>
+</html>
