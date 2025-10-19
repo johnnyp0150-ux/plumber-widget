@@ -13,7 +13,7 @@ const ALLOWED = new Set([
   "appliances:repair","other"
 ]);
 
-const normalizeCategory = (raw="")=>{
+const normalizeCategory = (raw = "") => {
   const s = String(raw).toLowerCase().trim();
   if (ALLOWED.has(s)) return s;
   const map = {
@@ -30,38 +30,62 @@ const normalizeCategory = (raw="")=>{
   return "other";
 };
 
-export default async function handler(req, res){
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+export default async function handler(req, res) {
+  // Handle CORS preflight quickly
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    return res.status(204).end();
+  }
+
+  if (req.method !== "POST") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   res.setHeader("Access-Control-Allow-Origin", "*");
+
   try {
     const { text = "", history = [] } = req.body || {};
-    const userText = String(text).slice(0,1000);
-    if (!userText.trim()) return res.status(200).json({ category:"other", followup:"" });
+    const userText = String(text).slice(0, 1000);
+    if (!userText.trim()) return res.status(200).json({ category: "other", followup: "" });
 
+    // If no API key, return safe fallback (frontend can still do regex routing)
     if (!hasKey) {
-      // No key? Soft-answer so the frontend uses regex fallback.
-      return res.status(200).json({ category:"other", followup:"" });
+      return res.status(200).json({ category: "other", followup: "" });
     }
 
     const system = `You are a router for a plumbing company.
-Return JSON: {"category":"<one-of-whitelist>", "followup":"<short question or empty>"}
+Return JSON only: {"category":"<one-of-whitelist>", "followup":"<short question or empty>"}.
 Whitelist: ${[...ALLOWED].join(", ")}.
 Rules: toilets→plumbing:toilet_repair_install; no hot water/water heater→plumbing:water_heaters; clogs/backups/hydro-jet→sewer_drains:drain_cleaning; sewer camera→sewer_drains:video_camera_inspection; flooding now→plumbing:emergency.`;
 
-    const user = `Text: ${userText}\nHistory: ${JSON.stringify(history).slice(0,1500)}\nOutput JSON only.`;
+    const user = `Text: ${userText}
+History: ${JSON.stringify(history).slice(0, 1500)}
+Output JSON only.`;
 
-    const out = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: [{ role:"system", content:system }, { role:"user", content:user }]
+    // Use Chat Completions (stable) and read the string result
+    const out = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user }
+      ]
     });
 
-    const raw = out.output_text ?? "{}";
-    let parsed = {}; try { parsed = JSON.parse(raw); } catch {}
+    const raw = out.choices?.[0]?.message?.content?.trim() ?? "{}";
+
+    let parsed = {};
+    try { parsed = JSON.parse(raw); } catch (_) { /* ignore parse failure */ }
+
     let category = normalizeCategory(parsed.category);
     if (!ALLOWED.has(category)) category = "other";
-    const followup = typeof parsed.followup === "string" ? parsed.followup.slice(0,180) : "";
-    res.status(200).json({ category, followup });
-  } catch {
-    res.status(200).json({ category:"other", followup:"" });
+    const followup = typeof parsed.followup === "string" ? parsed.followup.slice(0, 180) : "";
+
+    return res.status(200).json({ category, followup });
+  } catch (err) {
+    // Soft-fail so UX doesn’t break
+    return res.status(200).json({ category: "other", followup: "" });
   }
 }
