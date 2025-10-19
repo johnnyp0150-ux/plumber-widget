@@ -4,6 +4,8 @@ import { OpenAI } from "openai";
 
 const hasKey = !!process.env.OPENAI_API_KEY;
 const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+console.log("HAS OPENAI KEY?", hasKey);
+
 
 const ALLOWED = new Set([
   "plumbing:water_heaters","plumbing:toilet_repair_install","plumbing:leak_detection",
@@ -66,6 +68,7 @@ History: ${JSON.stringify(history).slice(0, 1500)}
 Output JSON only.`;
 
     // Use Chat Completions (stable) and read the string result
+    console.log("ABOUT TO CALL OPENAI");
     const out = await client.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,
