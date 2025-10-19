@@ -1,5 +1,6 @@
 // api/routeText.js
-import OpenAI from "openai";
+import { OpenAI } from "openai";
+
 
 const hasKey = !!process.env.OPENAI_API_KEY;
 const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
