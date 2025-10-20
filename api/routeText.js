@@ -1,11 +1,9 @@
 // api/routeText.js
-import { OpenAI } from "openai";
-
+import OpenAI from "openai";  // <-- default import for openai@^4
 
 const hasKey = !!process.env.OPENAI_API_KEY;
 const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
-console.log("HAS OPENAI KEY?", hasKey);
-
+console.log("routeText hasKey:", hasKey);
 
 const ALLOWED = new Set([
   "plumbing:water_heaters","plumbing:toilet_repair_install","plumbing:leak_detection",
@@ -16,7 +14,7 @@ const ALLOWED = new Set([
   "appliances:repair","other"
 ]);
 
-const normalizeCategory = (raw = "") => {
+function normalizeCategory(raw = "") {
   const s = String(raw).toLowerCase().trim();
 
   // Exact allow-list pass
@@ -32,6 +30,7 @@ const normalizeCategory = (raw = "") => {
     "water heater": "plumbing:water_heaters",
     no_hot_water: "plumbing:water_heaters",
     "no hot water": "plumbing:water_heaters",
+
     leak_detection: "plumbing:leak_detection",
     drain_cleaning: "sewer_drains:drain_cleaning",
     camera_inspection: "sewer_drains:video_camera_inspection",
@@ -54,15 +53,10 @@ const normalizeCategory = (raw = "") => {
     if (s.includes(tail)) return cat;
   }
   return "other";
-};
-
-  if (map[s]) return map[s];
-  for (const cat of ALLOWED) if (s.includes(cat.split(":")[1])) return cat;
-  return "other";
-};
+}
 
 export default async function handler(req, res) {
-  // Handle CORS preflight quickly
+  // CORS preflight
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -81,12 +75,12 @@ export default async function handler(req, res) {
     const userText = String(text).slice(0, 1000);
     if (!userText.trim()) return res.status(200).json({ category: "other", followup: "" });
 
-    // If no API key, return safe fallback (frontend can still do regex routing)
     if (!hasKey) {
+      // No API key? Return safe fallback; frontend regex still works.
       return res.status(200).json({ category: "other", followup: "" });
     }
 
-   const system = `You are a router for a plumbing company.
+    const system = `You are a router for a plumbing company.
 Return ONLY a JSON object with this exact shape:
 {"category":"<one-of-whitelist>","followup":"<short question or empty string>"}
 Whitelist: ${[...ALLOWED].join(", ")}.
@@ -98,41 +92,37 @@ Rules:
 - flooding now → plumbing:emergency
 Output JSON only. No markdown, no prose.`;
 
-
     const user = `Text: ${userText}
 History: ${JSON.stringify(history).slice(0, 1500)}
 Output JSON only.`;
 
-    // Use Chat Completions (stable) and read the string result
-    console.log("ABOUT TO CALL OPENAI");
+    // ---- CALL OPENAI (Responses API) ----
+    console.log("routeText: calling OpenAI");
     const out = await client.responses.create({
-  model: "gpt-4.1-mini",
-  response_format: { type: "json_object" },
-  input: [
-    { role: "system", content: system },
-    { role: "user",   content: user }
-  ]
-});
+      model: "gpt-4.1-mini",
+      response_format: { type: "json_object" },
+      input: [
+        { role: "system", content: system },
+        { role: "user",   content: user }
+      ],
+    });
 
+    // Prefer Responses API helper; fall back to Chat shape if present
+    let raw = out.output_text
+      ?? out.choices?.[0]?.message?.content
+      ?? "{}";
 
-    let raw = out.choices?.[0]?.message?.content?.trim() ?? "{}";
+    // If the model wrapped JSON in text/code fences, extract the object
+    if (raw && raw.trim()[0] !== "{") {
+      const m = raw.match(/\{[\s\S]*\}/);
+      raw = m ? m[0] : "{}";
+    }
 
-// If the model ever returns extra formatting (like code fences), grab the JSON object
-if (raw && raw.trim()[0] !== "{") {
-  const match = raw.match(/\{[\s\S]*\}/);
-  raw = match ? match[0] : "{}";
-}
-
-let parsed = {};
-try {
-  parsed = JSON.parse(raw);
-} catch {
-  parsed = {};
-}
-
+    // DEBUG: first 300 chars of raw output (see Vercel → Logs)
+    console.log("routeText raw:", String(raw).slice(0, 300));
 
     let parsed = {};
-    try { parsed = JSON.parse(raw); } catch (_) { /* ignore parse failure */ }
+    try { parsed = JSON.parse(raw); } catch { parsed = {}; }
 
     let category = normalizeCategory(parsed.category);
     if (!ALLOWED.has(category)) category = "other";
@@ -140,6 +130,7 @@ try {
 
     return res.status(200).json({ category, followup });
   } catch (err) {
+    console.log("routeText error:", err?.message || err);
     // Soft-fail so UX doesn’t break
     return res.status(200).json({ category: "other", followup: "" });
   }
