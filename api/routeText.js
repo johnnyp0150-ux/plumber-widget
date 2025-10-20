@@ -1,5 +1,5 @@
 // api/routeText.js
-import OpenAI from "openai";  // <-- default import for openai@^4
+import OpenAI from "openai"; // openai@^4 default export
 
 const hasKey = !!process.env.OPENAI_API_KEY;
 const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
@@ -17,10 +17,9 @@ const ALLOWED = new Set([
 function normalizeCategory(raw = "") {
   const s = String(raw).toLowerCase().trim();
 
-  // Exact allow-list pass
-  if (ALLOWED.has(s)) return s;
+  if (ALLOWED.has(s)) return s; // exact allow-list pass
 
-  // Common synonyms
+  // common synonyms
   const map = {
     toilet: "plumbing:toilet_repair_install",
     toilet_repair: "plumbing:toilet_repair_install",
@@ -34,20 +33,19 @@ function normalizeCategory(raw = "") {
     leak_detection: "plumbing:leak_detection",
     drain_cleaning: "sewer_drains:drain_cleaning",
     camera_inspection: "sewer_drains:video_camera_inspection",
-    emergency: "plumbing:emergency"
+    emergency: "plumbing:emergency",
   };
   if (map[s]) return map[s];
 
-  // Keyword heuristics
-  const kw = s;
-  if (/(water\s*heater|no\s*hot\s*water)/.test(kw)) return "plumbing:water_heaters";
-  if (/(toilet|wc)/.test(kw)) return "plumbing:toilet_repair_install";
-  if (/(leak|detect)/.test(kw)) return "plumbing:leak_detection";
-  if (/(drain|clog|backup|hydro[-\s]?jet)/.test(kw)) return "sewer_drains:drain_cleaning";
-  if (/camera/.test(kw)) return "sewer_drains:video_camera_inspection";
-  if (/(flood|burst|urgent|emergency)/.test(kw)) return "plumbing:emergency";
+  // keyword heuristics
+  if (/(water\s*heater|no\s*hot\s*water)/.test(s)) return "plumbing:water_heaters";
+  if (/(toilet|wc)/.test(s)) return "plumbing:toilet_repair_install";
+  if (/(leak|detect)/.test(s)) return "plumbing:leak_detection";
+  if (/(drain|clog|backup|hydro[-\s]?jet)/.test(s)) return "sewer_drains:drain_cleaning";
+  if (/camera/.test(s)) return "sewer_drains:video_camera_inspection";
+  if (/(flood|burst|urgent|emergency)/.test(s)) return "plumbing:emergency";
 
-  // As a last resort, try substring against allow-list second half
+  // final fallback: substring against allow-list tails
   for (const cat of ALLOWED) {
     const tail = cat.split(":")[1];
     if (s.includes(tail)) return cat;
@@ -73,10 +71,12 @@ export default async function handler(req, res) {
   try {
     const { text = "", history = [] } = req.body || {};
     const userText = String(text).slice(0, 1000);
-    if (!userText.trim()) return res.status(200).json({ category: "other", followup: "" });
+    if (!userText.trim()) {
+      return res.status(200).json({ category: "other", followup: "" });
+    }
 
+    // No API key? Return safe fallback; frontend can still route with regex.
     if (!hasKey) {
-      // No API key? Return safe fallback; frontend regex still works.
       return res.status(200).json({ category: "other", followup: "" });
     }
 
@@ -100,27 +100,21 @@ Output JSON only.`;
     console.log("routeText: calling OpenAI");
     const out = await client.responses.create({
       model: "gpt-4.1-mini",
-      response_format: { type: "json_object" },
       input: [
         { role: "system", content: system },
         { role: "user",   content: user }
       ],
     });
 
-    // Prefer Responses API helper; fall back to Chat shape if present
-    let raw = out.output_text
-      ?? out.choices?.[0]?.message?.content
-      ?? "{}";
-
-    // If the model wrapped JSON in text/code fences, extract the object
-    if (raw && raw.trim()[0] !== "{") {
-      const m = raw.match(/\{[\s\S]*\}/);
-      raw = m ? m[0] : "{}";
+    // ---- Extract the JSON string safely ----
+    let raw = (out.output_text || out.choices?.[0]?.message?.content || "").trim() || "{}";
+    if (raw[0] !== "{") {
+      const match = raw.match(/\{[\s\S]*\}/);
+      raw = match ? match[0] : "{}";
     }
+    console.log("routeText raw:", raw.slice(0, 300)); // sanity log for Vercel Logs
 
-    // DEBUG: first 300 chars of raw output (see Vercel → Logs)
-    console.log("routeText raw:", String(raw).slice(0, 300));
-
+    // ---- Parse and normalize ----
     let parsed = {};
     try { parsed = JSON.parse(raw); } catch { parsed = {}; }
 
