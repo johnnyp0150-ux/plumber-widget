@@ -1,90 +1,99 @@
-/* PipePilot Chat Widget Styles */
+<script>
+// Minimal PipePilot widget: chat + intent router + RAG call.
 
-#pipepilot-bubble {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  background-color: var(--accent, #0ea5e9);
-  color: white;
-  font-weight: bold;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-  z-index: 9999;
-}
+// --- CONFIG ---
+const BOOKING_URL = "https://cal.com/yourbiz/consult"; // <-- replace if you have one
+const BOOK_INTENTS = [
+  /book/i, /schedule/i, /appointment/i, /estimate/i, /quote/i, /today/i,
+  /tomorrow/i, /availability/i
+];
 
-#pipepilot-panel {
-  position: fixed;
-  bottom: 96px;
-  right: 24px;
-  width: 340px;
-  max-height: 480px;
-  display: none;
-  flex-direction: column;
-  background: white;
-  border-radius: 16px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.2);
-  overflow: hidden;
-  z-index: 9998;
-}
+// --- UI bootstrap (expects widget.css for styling) ---
+(function initPipePilot() {
+  if (document.getElementById("pipepilot-bubble")) return;
 
-#pipepilot-header {
-  background-color: var(--accent, #0ea5e9);
-  color: white;
-  padding: 12px 16px;
-  font-weight: 600;
-}
+  const bubble = document.createElement("div");
+  bubble.id = "pipepilot-bubble";
+  bubble.textContent = "💬";
+  document.body.appendChild(bubble);
 
-#pipepilot-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px 12px;
-  font-size: 14px;
-  line-height: 1.4;
-}
+  const panel = document.createElement("div");
+  panel.id = "pipepilot-panel";
+  panel.innerHTML = `
+    <div id="pipepilot-header">PipePilot — Ask about plumbing or book a visit</div>
+    <div id="pipepilot-messages"></div>
+    <div id="pipepilot-input">
+      <input id="pipepilot-text" placeholder="Type your question…" />
+      <button id="pipepilot-send">Send</button>
+    </div>`;
+  document.body.appendChild(panel);
 
-.pipepilot-msg {
-  margin-bottom: 8px;
-  padding: 8px 12px;
-  border-radius: 12px;
-  max-width: 80%;
-  word-wrap: break-word;
-}
+  const msgs = panel.querySelector("#pipepilot-messages");
+  const input = panel.querySelector("#pipepilot-text");
+  const sendBtn = panel.querySelector("#pipepilot-send");
 
-.pipepilot-user {
-  background: #e0f2fe;
-  margin-left: auto;
-}
+  const show = () => (panel.style.display = "flex");
+  const hide = () => (panel.style.display = "none");
+  let open = false;
+  bubble.onclick = () => { open = !open; open ? show() : hide(); input.focus(); };
 
-.pipepilot-bot {
-  background: #f1f5f9;
-  margin-right: auto;
-}
+  function addMsg(text, who="bot") {
+    const div = document.createElement("div");
+    div.className = `pipepilot-msg pipepilot-${who}`;
+    div.textContent = text;
+    msgs.appendChild(div);
+    msgs.scrollTop = msgs.scrollHeight;
+  }
 
-#pipepilot-input {
-  display: flex;
-  border-top: 1px solid #e2e8f0;
-}
+  async function handleSend() {
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = "";
+    addMsg(q, "user");
 
-#pipepilot-input input {
-  flex: 1;
-  padding: 10px;
-  border: none;
-  outline: none;
-  font-size: 14px;
-}
+    // Intent router: if it's probably a booking question, send them to booking.
+    if (BOOK_INTENTS.some(rx => rx.test(q))) {
+      const line = BOOKING_URL
+        ? `I can help you book now. Opening our booking page…`
+        : `I can take your info and get you scheduled. What day/time works best?`;
+      addMsg(line);
 
-#pipepilot-input button {
-  border: none;
-  background: var(--accent, #0ea5e9);
-  color: white;
-  padding: 0 16px;
-  cursor: pointer;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
+      if (BOOKING_URL) {
+        window.open(BOOKING_URL, "_blank", "noopener");
+      }
+      return;
+    }
+
+    // Otherwise, ask RAG endpoint.
+    addMsg("Thinking…");
+
+    try {
+      const res = await fetch("/api/rag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server error (${res.status})`);
+      }
+
+      const data = await res.json();
+      const answer = data.answer || "Sorry, I couldn't find that in our docs.";
+      // Optional: use data.sources if you include them in the API response.
+      addMsg(answer);
+    } catch (e) {
+      addMsg(`Error: ${e.message || e}`);
+    }
+  }
+
+  sendBtn.onclick = handleSend;
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") handleSend();
+  });
+
+  // Greeting
+  setTimeout(() => addMsg("Hi! Ask me a plumbing question or say 'book' to schedule."), 300);
+})();
+</script>
