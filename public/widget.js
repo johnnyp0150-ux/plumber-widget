@@ -68,24 +68,26 @@ const BOOK_INTENTS = [
     addMsg("Thinking…");
 
     try {
-      const res = await fetch("/api/rag", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q })
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `Server error (${res.status})`);
-      }
-
-      const data = await res.json();
-      const answer = data.answer || "Sorry, I couldn't find that in our docs.";
-      // Optional: use data.sources if you include them in the API response.
-      addMsg(answer);
-    } catch (e) {
-      addMsg(`Error: ${e.message || e}`);
+  const res = await fetch(
+    "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: q })
     }
+  );
+
+  if (!res.ok) {
+    throw new Error(`Server error (${res.status})`);
+  }
+
+  const data = await res.json();
+  const answer = data.message || "Sorry — I couldn’t generate a response.";
+  addMsg(answer);
+} catch (e) {
+  addMsg(`Error: ${e.message || e}`);
+}
+
   }
 
   sendBtn.onclick = handleSend;
