@@ -64,7 +64,8 @@
     }
   }
 
-  sendBtn.onclick = handleSend;
+ sendBtn.addEventListener("click", handleSend);
+
   input.addEventListener("keydown", e => {
     if (e.key === "Enter") handleSend();
   });
