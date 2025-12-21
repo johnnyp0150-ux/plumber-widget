@@ -43,7 +43,7 @@
     if (!q) return;
     input.value = "";
     addMsg(q, "user");
-    addMsg("Thinking…");
+   
 
     try {
       const res = await fetch(
@@ -70,7 +70,5 @@
     if (e.key === "Enter") handleSend();
   });
 
-  setTimeout(() => {
-    addMsg("Hi! Ask me a plumbing question.");
-  }, 300);
+
 })();
