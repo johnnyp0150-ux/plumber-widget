@@ -1,3 +1,5 @@
+console.log("🔥 OPTION B WIDGET LOADED 🔥");
+
 <script>
 // Minimal PipePilot widget: chat + intent router + RAG call.
 
