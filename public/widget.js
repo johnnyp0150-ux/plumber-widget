@@ -45,50 +45,36 @@ const BOOK_INTENTS = [
     msgs.scrollTop = msgs.scrollHeight;
   }
 
-  async function handleSend() {
-    const q = input.value.trim();
-    if (!q) return;
-    input.value = "";
-    addMsg(q, "user");
+async function handleSend() {
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = "";
+  addMsg(q, "user");
 
-    // Intent router: if it's probably a booking question, send them to booking.
-    if (BOOK_INTENTS.some(rx => rx.test(q))) {
-      const line = BOOKING_URL
-        ? `I can help you book now. Opening our booking page…`
-        : `I can take your info and get you scheduled. What day/time works best?`;
-      addMsg(line);
+  addMsg("Thinking…");
 
-      if (BOOKING_URL) {
-        window.open(BOOKING_URL, "_blank", "noopener");
+  try {
+    const res = await fetch(
+      "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: q,
+          source_page: window.location.href
+        })
       }
-      return;
-    }
+    );
 
-    // Otherwise, ask RAG endpoint.
-    addMsg("Thinking…");
+    if (!res.ok) throw new Error(`Server error (${res.status})`);
 
-    try {
-  const res = await fetch(
-    "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: q })
-    }
-  );
-
-  if (!res.ok) {
-    throw new Error(`Server error (${res.status})`);
+    const data = await res.json();
+    addMsg(data.message || "No response from assistant.");
+  } catch (e) {
+    addMsg(`Error: ${e.message || e}`);
   }
-
-  const data = await res.json();
-  const answer = data.message || "Sorry — I couldn’t generate a response.";
-  addMsg(answer);
-} catch (e) {
-  addMsg(`Error: ${e.message || e}`);
 }
 
-  }
 
   sendBtn.onclick = handleSend;
   input.addEventListener("keydown", (e) => {
