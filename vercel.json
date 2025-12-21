@@ -1,7 +1,5 @@
 {
   "rewrites": [
-    { "source": "/widget.js", "destination": "/widget.js" },
-    { "source": "/widget.css", "destination": "/widget.css" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/", "destination": "/index.html" }
   ]
 }
