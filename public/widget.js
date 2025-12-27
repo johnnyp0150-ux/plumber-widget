@@ -1,4 +1,4 @@
-// Minimal PipePilot widget — Option B (n8n-driven) — FIXED pending + no disappearing messages
+// Minimal PipePilot widget — Option B (n8n-driven) — with 1st-open greeting
 
 (function initPipePilot() {
   if (document.getElementById("pipepilot-bubble")) return;
@@ -24,10 +24,15 @@
   const input = panel.querySelector("#pipepilot-text");
   const sendBtn = panel.querySelector("#pipepilot-send");
 
-  bubble.onclick = () => {
-    panel.style.display = panel.style.display === "flex" ? "none" : "flex";
-    input.focus();
-  };
+  // ---- Greeting config ----
+  const GREETING_TEXT =
+    "Hi! I’m PipePilot. What can we help with today—clog, leak, water heater, or something else?";
+
+  let hasGreeted = false;
+
+  // If you want the greeting to show every time the user re-opens the widget,
+  // set this to true. Default false = greet only once per page load.
+  const RESET_GREETING_ON_CLOSE = false;
 
   function addMsg(text, who = "bot") {
     const div = document.createElement("div");
@@ -35,8 +40,29 @@
     div.textContent = text;
     msgs.appendChild(div);
     msgs.scrollTop = msgs.scrollHeight;
-    return div; // <- IMPORTANT: so we can remove the exact message later
+    return div; // so we can remove the exact message later
   }
+
+  function ensureGreeting() {
+    if (hasGreeted) return;
+    hasGreeted = true;
+    addMsg(GREETING_TEXT, "bot");
+  }
+
+  function togglePanel() {
+    const isOpen = panel.style.display === "flex";
+    if (isOpen) {
+      panel.style.display = "none";
+      if (RESET_GREETING_ON_CLOSE) hasGreeted = false;
+      return;
+    }
+
+    panel.style.display = "flex";
+    ensureGreeting();
+    input.focus();
+  }
+
+  bubble.onclick = togglePanel;
 
   async function handleSend() {
     const q = input.value.trim();
@@ -45,8 +71,7 @@
     input.value = "";
     addMsg(q, "user");
 
-    // Create a predictable "pending" message and keep a reference to it
-    const pending = addMsg("…", "bot"); // use "Thinking..." if you prefer
+    const pending = addMsg("…", "bot");
 
     try {
       const res = await fetch("https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget", {
@@ -56,15 +81,12 @@
       });
 
       if (!res.ok) {
-        // remove pending before showing error
         pending.remove();
         addMsg(`Server error (${res.status}).`, "bot");
         return;
       }
 
       const data = await res.json();
-
-      // remove pending before showing real response
       pending.remove();
 
       const reply =
