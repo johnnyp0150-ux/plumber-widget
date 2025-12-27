@@ -3,6 +3,26 @@
   try {
     if (document.getElementById("pipepilot-bubble")) return;
 
+    /**
+     * ✅ IMPORTANT (testing in n8n editor):
+     * When your Webhook node is in “Listening for test event”, you MUST post to the URL that contains:
+     *   /webhook-test/
+     * Example:
+     *   https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget
+     *
+     * ✅ Production (published workflow) usually uses:
+     *   /webhook/
+     *
+     * This script lets you switch without editing code:
+     * - If you set: window.PIPEPILOT_WEBHOOK_URL = "https://.../webhook-test/..."
+     *   it will use that.
+     * - Otherwise it will fall back to DEFAULT_WEBHOOK_URL below.
+     */
+    const DEFAULT_WEBHOOK_URL = "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget";
+    const WEBHOOK_URL =
+      (typeof window !== "undefined" && window.PIPEPILOT_WEBHOOK_URL) || DEFAULT_WEBHOOK_URL;
+
+    // Basic UI
     const bubble = document.createElement("div");
     bubble.id = "pipepilot-bubble";
     bubble.textContent = "💬";
@@ -15,7 +35,7 @@
       <div id="pipepilot-messages"></div>
       <div id="pipepilot-input">
         <input id="pipepilot-text" placeholder="Type your message…" />
-        <button id="pipepilot-send">Send</button>
+        <button id="pipepilot-send" type="button">Send</button>
       </div>
     `;
     document.body.appendChild(panel);
@@ -93,26 +113,43 @@
       input.value = "";
       addMsg(q, "user");
 
+      // pending indicator
       const pending = addMsg("…", "bot");
 
       try {
-        const res = await fetch("https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget", {
+        const res = await fetch(WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: q, sessionId })
+          // Keep payload simple + consistent
+          body: JSON.stringify({
+            message: q,
+            sessionId
+          })
         });
 
+        let data = null;
+        const contentType = res.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+          data = await res.json().catch(() => null);
+        } else {
+          // Fallback: if your Respond to Webhook returns plain text
+          const text = await res.text().catch(() => "");
+          data = { message: text };
+        }
+
+        pending.remove();
+
         if (!res.ok) {
-          pending.remove();
-          addMsg(`Server error (${res.status}).`, "bot");
+          const msg =
+            (data && (data.message || data.error || data.reply || data.text)) ||
+            `Server error (${res.status}).`;
+          addMsg(msg, "bot");
           return;
         }
 
-        const data = await res.json();
-        pending.remove();
-
         const reply =
-          (data && (data.message || data.reply || data.text)) ||
+          (data && (data.message || data.reply || data.text || data.output)) ||
           "No response from assistant.";
 
         addMsg(reply, "bot");
@@ -126,8 +163,13 @@
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleSend();
     });
+
+    // Optional: expose for quick debugging in console
+    window.PIPEPILOT_DEBUG = {
+      sessionId,
+      webhookUrl: WEBHOOK_URL
+    };
   } catch (e) {
-    // If something fails, at least log it instead of silently dying.
     console.error("PipePilot widget failed to initialize:", e);
   }
 })();
