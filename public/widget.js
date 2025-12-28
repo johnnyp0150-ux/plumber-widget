@@ -1,25 +1,18 @@
-// PipePilot widget — n8n-driven — stable + sessionId + TEST/PROD switch via ?n8n=test
+// PipePilot widget — Option B (n8n-driven) — stable + greeting + sessionId + TEST/PROD switch
 (function initPipePilot() {
   try {
     if (document.getElementById("pipepilot-bubble")) return;
 
-    // ---------- CONFIG ----------
-    const PROD_WEBHOOK = "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget";
-    const TEST_WEBHOOK = "https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget";
+    // ---- Config ----
+    const WEBHOOK_PROD = "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget";
+    const WEBHOOK_TEST = "https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget";
 
-    // Add ?n8n=test to your page URL to hit the webhook-test endpoint
+    // If your page URL includes ?n8n=test, use test webhook
     const params = new URLSearchParams(window.location.search);
-    const USE_TEST_WEBHOOK = params.get("n8n") === "test";
+    const IS_TEST = (params.get("n8n") || "").toLowerCase() === "test";
+    const WEBHOOK_URL = IS_TEST ? WEBHOOK_TEST : WEBHOOK_PROD;
 
-    const WEBHOOK_URL = USE_TEST_WEBHOOK ? TEST_WEBHOOK : PROD_WEBHOOK;
-
-    // Optional: show which mode you're in (tiny debug label in header)
-    const SHOW_MODE_BADGE = true;
-
-    // Greeting shown ONCE per page load (your n8n/system prompt rules may override behavior later)
-    const GREETING_TEXT = "Hi! I’m PipePilot. How can we help today?";
-    // ----------------------------
-
+    // ---- UI ----
     const bubble = document.createElement("div");
     bubble.id = "pipepilot-bubble";
     bubble.textContent = "💬";
@@ -29,8 +22,14 @@
     panel.id = "pipepilot-panel";
     panel.innerHTML = `
       <div id="pipepilot-header">
-        PipePilot Assistant
-        ${SHOW_MODE_BADGE ? `<span id="pipepilot-mode-badge" style="margin-left:8px;font-size:12px;opacity:.8;"></span>` : ""}
+        <span>PipePilot Assistant</span>
+        <span id="pipepilot-mode" style="
+          margin-left: 8px;
+          font-size: 12px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          background: rgba(255,255,255,0.25);
+        ">${IS_TEST ? "TEST" : "LIVE"}</span>
       </div>
       <div id="pipepilot-messages"></div>
       <div id="pipepilot-input">
@@ -43,14 +42,13 @@
     const msgs = panel.querySelector("#pipepilot-messages");
     const input = panel.querySelector("#pipepilot-text");
     const sendBtn = panel.querySelector("#pipepilot-send");
-    const modeBadge = panel.querySelector("#pipepilot-mode-badge");
 
-    if (modeBadge) {
-      modeBadge.textContent = USE_TEST_WEBHOOK ? "TEST" : "LIVE";
-      modeBadge.title = WEBHOOK_URL;
-    }
+    // ---- Greeting ----
+    const GREETING_TEXT = "Hi! I’m PipePilot. How can we help today?";
+    let hasGreeted = false;
+    const RESET_GREETING_ON_CLOSE = false;
 
-    // ---- Stable session id (persists across reloads) ----
+    // ---- Stable session id ----
     const SESSION_KEY = "pipepilot_session_id";
 
     function getOrCreateSessionId() {
@@ -85,8 +83,6 @@
       return div;
     }
 
-    // greet only once per page load
-    let hasGreeted = false;
     function ensureGreeting() {
       if (hasGreeted) return;
       hasGreeted = true;
@@ -97,6 +93,7 @@
       const isOpen = panel.style.display === "flex";
       if (isOpen) {
         panel.style.display = "none";
+        if (RESET_GREETING_ON_CLOSE) hasGreeted = false;
         return;
       }
       panel.style.display = "flex";
@@ -116,48 +113,40 @@
       const pending = addMsg("…", "bot");
 
       try {
+        console.log("[PipePilot] POST ->", WEBHOOK_URL, { message: q, sessionId, mode: IS_TEST ? "test" : "prod" });
+
         const res = await fetch(WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             message: q,
             sessionId,
-            // helpful debugging for n8n:
-            client: "pipepilot-widget",
-            mode: USE_TEST_WEBHOOK ? "test" : "live",
-            pageUrl: window.location.href
+            // optional: helps debugging in n8n logs if you want it
+            source: "widget",
+            mode: IS_TEST ? "test" : "prod"
           })
         });
 
         if (!res.ok) {
           pending.remove();
-
-          // Common gotchas explained inline
-          if (USE_TEST_WEBHOOK && (res.status === 404 || res.status === 410)) {
-            addMsg(
-              "Test webhook isn’t listening in n8n. Open the Webhook node and click “Listen for test event”, then try again.",
-              "bot"
-            );
-            return;
-          }
-
           addMsg(`Server error (${res.status}).`, "bot");
           return;
         }
 
         const data = await res.json();
+        console.log("[PipePilot] response <-", data);
+
         pending.remove();
 
         const reply =
-          (data && (data.message || data.reply || data.text || data.output)) ||
+          (data && (data.message || data.reply || data.text)) ||
           "No response from assistant.";
 
         addMsg(reply, "bot");
       } catch (err) {
+        console.error("[PipePilot] fetch failed:", err);
         pending.remove();
         addMsg("Error contacting assistant.", "bot");
-        // optional console debug
-        console.error("PipePilot fetch error:", err);
       }
     }
 
@@ -165,6 +154,9 @@
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleSend();
     });
+
+    // Optional: open automatically if you want
+    // togglePanel();
   } catch (e) {
     console.error("PipePilot widget failed to initialize:", e);
   }
