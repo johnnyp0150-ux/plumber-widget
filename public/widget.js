@@ -1,29 +1,25 @@
-// PipePilot widget — Option B (n8n-driven) — stable + greeting + sessionId
+// PipePilot widget — n8n-driven — stable + sessionId + TEST/PROD switch via ?n8n=test
 (function initPipePilot() {
   try {
     if (document.getElementById("pipepilot-bubble")) return;
 
-    /**
-     * ✅ IMPORTANT (testing in n8n editor):
-     * When your Webhook node is in “Listening for test event”, you MUST post to the URL that contains:
-     *   /webhook-test/
-     * Example:
-     *   https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget
-     *
-     * ✅ Production (published workflow) usually uses:
-     *   /webhook/
-     *
-     * This script lets you switch without editing code:
-     * - If you set: window.PIPEPILOT_WEBHOOK_URL = "https://.../webhook-test/..."
-     *   it will use that.
-     * - Otherwise it will fall back to DEFAULT_WEBHOOK_URL below.
-     */
-    const DEFAULT_WEBHOOK_URL = "https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget
-";
-    const WEBHOOK_URL =
-      (typeof window !== "undefined" && window.PIPEPILOT_WEBHOOK_URL) || DEFAULT_WEBHOOK_URL;
+    // ---------- CONFIG ----------
+    const PROD_WEBHOOK = "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget";
+    const TEST_WEBHOOK = "https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget";
 
-    // Basic UI
+    // Add ?n8n=test to your page URL to hit the webhook-test endpoint
+    const params = new URLSearchParams(window.location.search);
+    const USE_TEST_WEBHOOK = params.get("n8n") === "test";
+
+    const WEBHOOK_URL = USE_TEST_WEBHOOK ? TEST_WEBHOOK : PROD_WEBHOOK;
+
+    // Optional: show which mode you're in (tiny debug label in header)
+    const SHOW_MODE_BADGE = true;
+
+    // Greeting shown ONCE per page load (your n8n/system prompt rules may override behavior later)
+    const GREETING_TEXT = "Hi! I’m PipePilot. How can we help today?";
+    // ----------------------------
+
     const bubble = document.createElement("div");
     bubble.id = "pipepilot-bubble";
     bubble.textContent = "💬";
@@ -32,11 +28,14 @@
     const panel = document.createElement("div");
     panel.id = "pipepilot-panel";
     panel.innerHTML = `
-      <div id="pipepilot-header">PipePilot Assistant</div>
+      <div id="pipepilot-header">
+        PipePilot Assistant
+        ${SHOW_MODE_BADGE ? `<span id="pipepilot-mode-badge" style="margin-left:8px;font-size:12px;opacity:.8;"></span>` : ""}
+      </div>
       <div id="pipepilot-messages"></div>
       <div id="pipepilot-input">
         <input id="pipepilot-text" placeholder="Type your message…" />
-        <button id="pipepilot-send" type="button">Send</button>
+        <button id="pipepilot-send">Send</button>
       </div>
     `;
     document.body.appendChild(panel);
@@ -44,13 +43,12 @@
     const msgs = panel.querySelector("#pipepilot-messages");
     const input = panel.querySelector("#pipepilot-text");
     const sendBtn = panel.querySelector("#pipepilot-send");
+    const modeBadge = panel.querySelector("#pipepilot-mode-badge");
 
-    // ---- Greeting config ----
-    const GREETING_TEXT = "Hi! I’m PipePilot. How can we help today?";
-    let hasGreeted = false;
-
-    // greet only once per page load
-    const RESET_GREETING_ON_CLOSE = false;
+    if (modeBadge) {
+      modeBadge.textContent = USE_TEST_WEBHOOK ? "TEST" : "LIVE";
+      modeBadge.title = WEBHOOK_URL;
+    }
 
     // ---- Stable session id (persists across reloads) ----
     const SESSION_KEY = "pipepilot_session_id";
@@ -87,6 +85,8 @@
       return div;
     }
 
+    // greet only once per page load
+    let hasGreeted = false;
     function ensureGreeting() {
       if (hasGreeted) return;
       hasGreeted = true;
@@ -97,7 +97,6 @@
       const isOpen = panel.style.display === "flex";
       if (isOpen) {
         panel.style.display = "none";
-        if (RESET_GREETING_ON_CLOSE) hasGreeted = false;
         return;
       }
       panel.style.display = "flex";
@@ -114,40 +113,40 @@
       input.value = "";
       addMsg(q, "user");
 
-      // pending indicator
       const pending = addMsg("…", "bot");
 
       try {
         const res = await fetch(WEBHOOK_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // Keep payload simple + consistent
           body: JSON.stringify({
             message: q,
-            sessionId
+            sessionId,
+            // helpful debugging for n8n:
+            client: "pipepilot-widget",
+            mode: USE_TEST_WEBHOOK ? "test" : "live",
+            pageUrl: window.location.href
           })
         });
 
-        let data = null;
-        const contentType = res.headers.get("content-type") || "";
-
-        if (contentType.includes("application/json")) {
-          data = await res.json().catch(() => null);
-        } else {
-          // Fallback: if your Respond to Webhook returns plain text
-          const text = await res.text().catch(() => "");
-          data = { message: text };
-        }
-
-        pending.remove();
-
         if (!res.ok) {
-          const msg =
-            (data && (data.message || data.error || data.reply || data.text)) ||
-            `Server error (${res.status}).`;
-          addMsg(msg, "bot");
+          pending.remove();
+
+          // Common gotchas explained inline
+          if (USE_TEST_WEBHOOK && (res.status === 404 || res.status === 410)) {
+            addMsg(
+              "Test webhook isn’t listening in n8n. Open the Webhook node and click “Listen for test event”, then try again.",
+              "bot"
+            );
+            return;
+          }
+
+          addMsg(`Server error (${res.status}).`, "bot");
           return;
         }
+
+        const data = await res.json();
+        pending.remove();
 
         const reply =
           (data && (data.message || data.reply || data.text || data.output)) ||
@@ -157,6 +156,8 @@
       } catch (err) {
         pending.remove();
         addMsg("Error contacting assistant.", "bot");
+        // optional console debug
+        console.error("PipePilot fetch error:", err);
       }
     }
 
@@ -164,12 +165,6 @@
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") handleSend();
     });
-
-    // Optional: expose for quick debugging in console
-    window.PIPEPILOT_DEBUG = {
-      sessionId,
-      webhookUrl: WEBHOOK_URL
-    };
   } catch (e) {
     console.error("PipePilot widget failed to initialize:", e);
   }
