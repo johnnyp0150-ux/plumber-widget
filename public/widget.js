@@ -18,7 +18,8 @@
      *   it will use that.
      * - Otherwise it will fall back to DEFAULT_WEBHOOK_URL below.
      */
-    const DEFAULT_WEBHOOK_URL = "https://johnnyp0150.app.n8n.cloud/webhook/plumber-widget";
+    const DEFAULT_WEBHOOK_URL = "https://johnnyp0150.app.n8n.cloud/webhook-test/plumber-widget
+";
     const WEBHOOK_URL =
       (typeof window !== "undefined" && window.PIPEPILOT_WEBHOOK_URL) || DEFAULT_WEBHOOK_URL;
 
